@@ -1,0 +1,174 @@
+# Install necessary R packages for data manipulation, visualization, and statistical modeling
+install.packages("ggplot2")
+install.packages("dplyr")
+install.packages("corrplot")
+install.packages("gmodels")
+install.packages("pROC")
+install.packages("carData")
+install.packages("rpart")
+install.packages("rpart.plot")
+
+# Load the installed packages into the R environment
+library(ggplot2)
+library(dplyr)
+library(corrplot)
+library(gmodels)
+library(pROC)
+library(carData)
+library(rpart)
+library(rpart.plot)
+
+# Load the Chile dataset for analysis
+data <- Chile
+
+# Data preprocessing: converting categorical variables into factors with appropriate levels and labels
+data$education <- factor(data$education, order=TRUE, levels=c("P", "S", "PS"), labels=c("Primary", "Secondary", "Post-secondary"))
+data$sex <- factor(data$sex, levels=c("M", "F"), labels=c("Male", "Female"))
+data$region <- factor(data$region, levels=c("C", "M", "N", "S", "SA"), labels=c("Central", "Metropolitan Santiago", "North", "South", "Santiago"))
+
+# Handling missing data: imputing missing values for age and education, and removing incomplete cases
+data$age[is.na(data$age)] <- median(data$age, na.rm=TRUE)
+data$education[is.na(data$education)] <- "Secondary"
+data <- data[complete.cases(data$income), ]  
+data <- data[complete.cases(data$statusquo), ]  
+data <- data[complete.cases(data$vote), ]
+
+# Generating summary statistics for the dataset
+summary(data)
+
+# Creating subsets of data based on region
+data_sa <- data %>% filter(region == "Santiago")
+data_m <- data %>% filter(region == "Metropolitan Santiago")
+data_c <- data %>% filter(region == "Central")
+summary(data_sa)
+summary(data_m)
+summary(data_c)
+data$region[data$region == "Metropolitan Santiago"] <- "Central"
+
+# Data visualization: creating various plots to explore the dataset
+# Plots include bar charts and histograms for different demographic variables
+
+# Further data processing and analysis
+# Creating a binary indicator for the vote variable
+data$vote_ind <- ifelse(data$vote == "Y", 1, 0)
+
+# Correlation analysis of numeric variables
+data %>% select_if(is.numeric) %>% cor(use="complete.obs") %>% corrplot()    
+
+# Cross-tabulation analysis to explore relationships between voting patterns and other variables
+CrossTable(data$vote_ind, data$region, digits=2, chisq=TRUE, prop.r=TRUE, prop.c=TRUE, prop.t=TRUE, prop.chisq=TRUE)
+CrossTable(data$vote_ind, data$sex, digits=2, chisq=TRUE, prop.r=TRUE, prop.c=TRUE, prop.t=TRUE, prop.chisq=TRUE)
+CrossTable(data$vote_ind, data$education, digits=2, chisq=TRUE, prop.r=TRUE, prop.c=TRUE, prop.t=TRUE, prop.chisq=TRUE)
+
+# Preparing data for modeling: removing unnecessary columns
+data <- data %>% select(-statusquo, -vote) 
+
+# Splitting the data into training and test sets
+set.seed(123)
+ntrain <- round(nrow(data) * 0.8)
+tindex <- sample(nrow(data), ntrain)
+train <- data[tindex, ]
+test <- data[-tindex, ]
+
+# Building predictive models: logistic regression and decision tree
+# Logistic Regression Model
+reg <- step(glm(vote_ind ~ ., family=binomial, data=train), direction="both")
+# Decision Tree Model
+tree <- rpart(vote_ind ~ ., data=train, method="class", cp=0.004182)
+rpart.plot(tree)
+
+# Model summaries
+summary(reg)
+summary(tree)
+
+# Model Evaluation and Prediction
+
+# Predicting responses using the logistic regression model for the training set
+train$pred <- predict(reg, train, type="response")
+# Creating binary prediction based on the predicted probability
+train$pred_ind <- ifelse(train$pred > 0.5, 1, 0)
+
+# Creating a confusion matrix for the training set predictions
+train_confMat <- table(train$vote_ind, train$pred_ind) %>% print()
+# Calculating accuracy, sensitivity, and specificity for the training set
+train_accuracy <- ((train_confMat[1,1] + train_confMat[2,2]) / sum(train_confMat)) %>% print()
+train_sensitivity <- (train_confMat[2,2] / sum(train_confMat[2,])) %>% print()
+train_specificity <- (train_confMat[1,1] / sum(train_confMat[1,])) %>% print()
+
+# ROC analysis for the logistic regression model on training set
+rocObject <- roc(train$vote_ind, train$pred)
+auc(rocObject)  # Area Under the Curve
+# Plotting ROC curve
+TPR = rev(rocObject$sensitivities)  # True Positive Rate
+FPR = rev(1 - rocObject$specificities)  # False Positive Rate
+plot(FPR, TPR, type="o")
+abline(0, 1)
+
+# Predicting responses using the logistic regression model for the test set
+test$pred <- predict(reg, test, type="response")
+test$pred_ind <- ifelse(test$pred > 0.5, 1, 0)
+
+# Creating a confusion matrix for the test set predictions
+test_confMat <- table(test$vote_ind, test$pred_ind) %>% print()
+# Calculating accuracy, sensitivity, and specificity for the test set
+test_accuracy <- ((test_confMat[1,1] + test_confMat[2,2]) / sum(test_confMat)) %>% print()
+test_sensitivity <- (test_confMat[2,2] / sum(test_confMat[2,])) %>% print()
+test_specificity <- (test_confMat[1,1] / sum(test_confMat[1,])) %>% print()
+
+# ROC analysis for the logistic regression model on test set
+test_rocObject <- roc(test$vote_ind, test$pred)
+auc(test_rocObject)  # Area Under the Curve
+# Plotting ROC curve for test set
+test_TPR = rev(test_rocObject$sensitivities)
+test_FPR = rev(1 - test_rocObject$specificities)
+plot(test_FPR, test_TPR, type="o")
+abline(0, 1)
+
+# Cleaning up the data by removing prediction columns
+train <- train %>% select(-pred, -pred_ind)
+test <- test %>% select(-pred, -pred_ind)
+
+# Predicting responses using the decision tree model for the training set
+train_pred <- predict(tree, train, type="class")
+# Calculating accuracy for the decision tree model on the training set
+mean(train$vote_ind == train_pred)
+# Creating a confusion matrix
+train_confMat <- table(train$vote_ind, train_pred) %>% print()
+# Calculating accuracy, sensitivity, and specificity
+train_accuracy <- ((train_confMat[1,1] + train_confMat[2,2]) / sum(train_confMat)) %>% print()
+train_sensitivity <- (train_confMat[2,2] / sum(train_confMat[2,])) %>% print()
+train_specificity <- (train_confMat[1,1] / sum(train_confMat[1,])) %>% print()
+
+# ROC analysis for the decision tree model on training set
+train_pred <- predict(tree, train, type="prob")
+train_rocObject <- roc(train$vote_ind, train_pred[,2])
+auc(train_rocObject)  # Area Under the Curve
+# Plotting ROC curve for training set
+train_TPR = rev(train_rocObject$sensitivities)
+train_FPR = rev(1 - train_rocObject$specificities)
+plot(train_FPR, train_TPR, type="o")
+abline(0, 1)
+
+# Predicting responses using the decision tree model for the test set
+test_pred <- predict(tree, test, type="class")
+# Calculating accuracy for the decision tree model on the test set
+mean(test$vote_ind == test_pred)
+# Creating a confusion matrix
+test_confMat <- table(test$vote_ind, test_pred) %>% print()
+# Calculating accuracy, sensitivity, and specificity
+test_accuracy <- ((test_confMat[1,1] + test_confMat[2,2]) / sum(test_confMat)) %>% print()
+test_sensitivity <- (test_confMat[2,2] / sum(test_confMat[2,])) %>% print()
+test_specificity <- (test_confMat[1,1] / sum(test_confMat[1,])) %>% print()
+
+# Predicting probabilities using the decision tree model for the test set
+test_pred <- predict(tree, test, type="prob")
+# ROC analysis for the decision tree model on the test set
+test_rocObject <- roc(test$vote_ind, test_pred[,2])
+# Area Under the Curve (AUC) calculation
+auc(test_rocObject)
+# Plotting the ROC curve for the decision tree model on the test set
+test_TPR = rev(test_rocObject$sensitivities)  # True Positive Rate
+test_FPR = rev(1 - test_rocObject$specificities)  # False Positive Rate
+plot(test_FPR, test_TPR, type="o")
+abline(0, 1)  # Adding a diagonal line for reference
+  
